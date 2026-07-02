@@ -1,0 +1,15 @@
+.env
+__pycache__/
+.pytest_cache/
+.impeccable
+report.md
+*.pyc
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+research_outputs/
+*.out.md
+*.out.json
+# Don't commit your real network export
+Connections.csv
+second_degree*.json

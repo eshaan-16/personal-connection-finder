@@ -1,0 +1,6 @@
+# Connection Finder runs on the Python standard library alone (urllib, sqlite3,
+# html.parser, concurrent.futures). No third-party packages are required.
+#
+# Optional: install certifi if your environment lacks a system CA bundle and
+# you hit TLS verification errors.
+# certifi
