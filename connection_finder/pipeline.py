@@ -128,8 +128,8 @@ def find_connectors(
             key=lambda r: (SIGNAL_WEIGHT.get(r.signal_category, 0.3), len(r.snippet or "")),
             reverse=True,
         )
+        fetch_targets = prioritized[: settings.max_pages_total]
         if settings.fetch_pages:
-            fetch_targets = prioritized[: settings.max_pages_total]
             _log(f"Fetching {len(fetch_targets)} of {len(all_results)} pages "
                  f"(cap {settings.max_pages_total})...", verbose)
             for result in fetch_targets:
@@ -147,9 +147,10 @@ def find_connectors(
                     if key not in photo_seen:
                         photo_seen.add(key)
                         photo_pool.append((image, result.published_date))
-            feed = [r for r in fetch_targets if r.page_text]
-        else:
-            feed = prioritized[: settings.max_pages_total]  # snippet-only mode
+        # Feed ALL selected results — including ones whose fetch returned no text.
+        # The extractor falls back to their snippet, so a failed/JS-heavy page
+        # still contributes the people named in its search snippet.
+        feed = fetch_targets
 
         # 3) One batched, cached extraction pass over the bounded evidence set.
         raw_candidates = extract_candidates(
@@ -172,15 +173,21 @@ def find_connectors(
                                      max_photos=1, page_date=page_date, verbose=verbose)
                 )
 
-        # 5) Score, then filter out well-known people so niche leads surface.
+        # 5) Score, filter out well-known people, but keep at least min_results.
         scored, removed_famous = score_and_rank(
             raw_candidates, results_by_url, network=network,
             stale_years=settings.stale_years, recent_years=settings.recent_years,
             remove_famous=settings.remove_famous, max_fame=settings.max_fame,
+            min_results=settings.min_results,
         )
         if removed_famous:
             _log(f"Filtered {len(removed_famous)} well-known people "
                  f"(fame >= {settings.max_fame}); keeping niche connections.", verbose)
+        if len(scored) < settings.min_results:
+            warnings.append(
+                f"Only {len(scored)} connections found (wanted {settings.min_results}); "
+                "try raising --max-fame, --max-pages-total, or broadening the context."
+            )
         store.record(run_id, target_key, scored)
     finally:
         store.close()  # always release the sqlite/WAL handle, even on error

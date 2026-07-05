@@ -374,13 +374,16 @@ def score_and_rank(
     recent_years: int = 5,
     remove_famous: bool = False,
     max_fame: float = 0.6,
+    min_results: int = 0,
 ) -> tuple[list[ScoredCandidate], list[ScoredCandidate]]:
     """Return (kept, removed_famous).
 
     When ``remove_famous`` is set, anyone whose fame score is >= ``max_fame`` is
     pulled out of the main list (they're easy to find on your own) and returned
-    separately so the caller can report how many were filtered. Both lists are
-    sorted best-first.
+    separately. But ``min_results`` is a FLOOR: if fame filtering leaves fewer
+    than ``min_results`` people, the least-famous of the removed are added back
+    (closest to the niche threshold first) until the floor is met — so the user
+    still gets a full list rather than a handful. Both lists are sorted best-first.
     """
     candidates = merge_candidates(raws, results_by_url)
     scored = [
@@ -388,14 +391,24 @@ def score_and_rank(
         for c in candidates
     ]
 
+    def rank_key(s: ScoredCandidate):
+        return (s.score, s.distinct_domains, s.most_recent_date)
+
     kept, removed = scored, []
     if remove_famous:
         kept = [s for s in scored if s.fame < max_fame]
         removed = [s for s in scored if s.fame >= max_fame]
 
+        # Floor: backfill from the removed (least-famous, then best-scoring first)
+        # so the user always gets a usable number of leads.
+        if min_results and len(kept) < min_results and removed:
+            backfill = sorted(removed, key=lambda s: (s.fame, -s.score))
+            need = min_results - len(kept)
+            promoted = backfill[:need]
+            promoted_ids = {id(s) for s in promoted}
+            kept = kept + promoted
+            removed = [s for s in removed if id(s) not in promoted_ids]
+
     for group in (kept, removed):
-        group.sort(
-            key=lambda s: (s.score, s.distinct_domains, s.most_recent_date),
-            reverse=True,
-        )
+        group.sort(key=rank_key, reverse=True)
     return kept, removed

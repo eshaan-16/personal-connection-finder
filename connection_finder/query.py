@@ -65,12 +65,27 @@ def build_queries(
     add(f'{head} childhood OR hometown OR "grew up"', "incidental")
     add(f'{head} roommate OR classmate OR "high school"', "institutional_affiliation")
 
-    # 5. Staff and everyday collaborators (assistants/aides are niche, reachable).
-    add(f'{head} assistant OR "chief of staff" OR spokesperson OR aide', "professional_co_occurrence")
+    # 5. Deep WORK history — former colleagues, early jobs, direct reports. These
+    #    surface real working relationships beyond the famous co-founders.
+    add(f'{head} "worked with" OR "worked for" OR "worked alongside"', "professional_co_occurrence")
+    add(f'{head} "former colleague" OR "former boss" OR "former employee"', "professional_co_occurrence")
+    add(f'{head} "early career" OR "first job" OR "started his career" OR "started her career"', "professional_co_occurrence")
+    add(f'{head} "hired by" OR "reported to" OR "worked under" OR "right-hand"', "professional_co_occurrence")
 
-    # 6. Public social proof and personal events (weddings/funerals name the circle).
-    add(f'{head} mentor OR "early supporter"', "social_proof")
-    add(f"{head} wedding OR funeral OR reunion", "joint_appearance")
+    # 6. Staff and everyday collaborators (assistants/aides are niche, reachable).
+    add(f'{head} assistant OR "chief of staff" OR spokesperson OR aide OR secretary', "professional_co_occurrence")
+
+    # 7. OLD / past personal relationships — former ties and reconnections.
+    add(f'{head} "old friend" OR "used to" OR reconnected OR "back then"', "incidental")
+    add(f'{head} former OR ex OR "years ago" OR "early days"', "incidental")
+
+    # 8. Deep personal circle — the people at private milestones.
+    add(f'{head} "best man" OR "maid of honor" OR godfather OR godmother', "close_friend")
+    add(f'{head} confidant OR "inner circle" OR mentor OR protege', "close_friend")
+
+    # 9. Public social proof and personal events (weddings/funerals name the circle).
+    add(f'{head} "early supporter" OR "believed in" OR "first backer"', "social_proof")
+    add(f"{head} wedding OR funeral OR reunion OR memorial", "joint_appearance")
 
     # Optional narrowing terms get their own incidental probes plus refine the
     # broad query toward the requested era/scene.

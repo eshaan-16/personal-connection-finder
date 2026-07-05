@@ -33,8 +33,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--providers", help="Comma list to restrict providers: brave,google_cse,bing")
     parser.add_argument("--max-results", type=int, default=6, help="Results per query (default 6)")
     parser.add_argument("--max-pages", type=int, default=2, help="Pages to fetch full text per query (default 2)")
-    parser.add_argument("--max-pages-total", type=int, default=16,
-                        help="Hard cap on page fetches + extraction evidence per run (default 16)")
+    parser.add_argument("--max-pages-total", type=int, default=24,
+                        help="Hard cap on page fetches + extraction evidence per run (default 24)")
+    parser.add_argument("--min-results", type=int, default=15,
+                        help="Floor on results: backfill from filtered-famous if fewer (default 15)")
     parser.add_argument("--batch-size", type=int, default=8,
                         help="Evidence items per Gemini extraction call (default 8)")
     parser.add_argument("--max-queries", type=int, default=0, help="Cap total queries (0 = full batch)")
@@ -70,6 +72,7 @@ def _build_settings(args) -> Settings:
         deep_verify=args.deep_verify,
         remove_famous=not args.keep_famous,
         max_fame=args.max_fame,
+        min_results=args.min_results,
         max_queries=args.max_queries,
         fetch_pages=not args.no_fetch,
         analyze_photos=args.analyze_photos,

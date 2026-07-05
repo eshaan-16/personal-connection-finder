@@ -454,6 +454,16 @@ def test_fame():
     kept2, removed2 = score_and_rank(raws, {}, remove_famous=False)
     check("keep-famous keeps everyone", len(kept2) == 3 and removed2 == [])
 
+    # min_results floor: when filtering leaves too few, backfill from removed.
+    kept_floor, removed_floor = score_and_rank(raws, {}, remove_famous=True, max_fame=0.6, min_results=3)
+    check("floor backfills to min_results", len(kept_floor) == 3)
+    check("backfilled the least-famous removed person",
+          "Melinda French Gates" in {s.candidate.name for s in kept_floor})
+    check("removed list shrinks after backfill", len(removed_floor) == 0)
+    # A floor never invents people beyond what exists.
+    kept_cap, _ = score_and_rank(raws, {}, remove_famous=True, max_fame=0.6, min_results=99)
+    check("floor is capped at available candidates", len(kept_cap) == 3)
+
     # A dedicated Wikipedia article marks someone famous even if rated 'private'.
     raws_wiki = [RawCandidate(name="Jane Q Roe", explanation="x", signal_category="incidental",
                  confidence=0.5, citation_url="https://en.wikipedia.org/wiki/Jane_Q_Roe",
@@ -467,7 +477,10 @@ def test_fame():
     # Free person-name backstop keeps people, drops headline/label junk.
     check("backstop keeps a real name", _plausible_person_name("Mary Jane Watson"))
     check("backstop keeps name with suffix", _plausible_person_name("William Henry Gates II"))
+    check("backstop keeps surname-collision names", _plausible_person_name("George Best"))
+    check("backstop keeps 'Herbert Read'", _plausible_person_name("Herbert Read"))
     check("backstop drops headline label", not _plausible_person_name("When To Use"))
+    check("backstop drops 'Getting Started'", not _plausible_person_name("Getting Started"))
     check("backstop drops single token", not _plausible_person_name("Melinda"))
 
 

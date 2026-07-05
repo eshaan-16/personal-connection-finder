@@ -47,7 +47,7 @@ class Settings:
     # --- Tunables ---
     max_results_per_query: int = 6
     max_pages_per_query: int = 2   # how many results to fetch full text for
-    max_pages_total: int = 16      # hard cap on page fetches per run (cost/time)
+    max_pages_total: int = 24      # hard cap on page fetches per run (cost/time)
     max_queries: int = 0           # 0 = use the full generated batch
     fetch_pages: bool = True
     analyze_photos: bool = False   # vision-analyze uncaptioned images (needs Gemini)
@@ -66,6 +66,7 @@ class Settings:
     # --- Fame filtering (surface niche connections, drop well-known people) ---
     remove_famous: bool = True     # drop people whose fame >= max_fame
     max_fame: float = 0.6          # 1.0=household, 0.65=industry-known, 0.3=niche
+    min_results: int = 15          # floor: backfill from filtered if kept < this
 
     # --- Persistence ---
     db_path: str = "connection_finder.sqlite3"

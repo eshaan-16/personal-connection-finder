@@ -132,14 +132,15 @@ def _has_non_name_word(name: str) -> bool:
 # Function/headline words that never appear as a token in a real person's name.
 # Lets the free person-name backstop reject obvious labels ("When To Use") so we
 # can skip the paid LLM verification pass by default.
+# Kept deliberately to PURE function/headline words. Surname-capable nouns
+# (Best, Read, Story, Young, Reed, News, Summit...) are intentionally excluded so
+# a real person is never dropped — the strict LLM prompt is the primary junk
+# filter; this is only a cheap backstop for obvious labels ("When To Use").
 _NON_PERSON_TOKENS = {
     "when", "to", "use", "using", "used", "how", "why", "what", "which", "who",
-    "whom", "where", "get", "getting", "best", "top", "guide", "tips", "vs",
-    "versus", "is", "are", "was", "were", "your", "you", "our", "about",
-    "contact", "read", "learn", "sign", "click", "here", "view", "show", "hide",
-    "faq", "review", "overview", "for", "with", "from", "into", "list",
-    "interview", "meeting", "event", "summit", "episode", "story", "report",
-    "profile", "news",
+    "whom", "where", "vs", "versus", "is", "are", "was", "were", "your", "you",
+    "our", "about", "getting", "click", "faq", "overview", "for", "with", "from",
+    "into", "here", "subscribe", "learn", "href", "http", "https", "www",
 }
 _NAME_PARTICLES = {
     "van", "von", "de", "del", "della", "di", "da", "la", "le", "bin", "al",
@@ -160,7 +161,9 @@ def _plausible_person_name(name: str) -> bool:
     key = name_tokens(name)
     if len(key) < 2:
         return False
-    if any(tok in _NON_NAME_WORDS or tok in _NON_PERSON_TOKENS for tok in key):
+    # Only the curated pure-function-word set — NOT _NON_NAME_WORDS, which is
+    # tuned for web chrome and contains surname-capable words like "read".
+    if any(tok in _NON_PERSON_TOKENS for tok in key):
         return False
     caps = 0
     for index, tok in enumerate(tokens):
@@ -850,17 +853,18 @@ def extract_candidates(
             if cached is not None:
                 out.extend(cached)
                 continue
-        used_fallback = False
         try:
             extracted = gemini.extract(target_name, context, batch)
         except HttpError as error:
+            # With Gemini configured, a transient batch failure is SKIPPED rather
+            # than falling back to the regex heuristic — the heuristic pulls
+            # bylines/company names/headline fragments out of noisy snippets and
+            # would inject junk. Returning the successful batches is cleaner.
             if verbose:
-                print(f"  [gemini] extraction failed ({error}); heuristic fallback for this batch.",
+                print(f"  [gemini] extraction failed ({error}); skipping this batch.",
                       file=sys.stderr)
-            extracted = heuristic_extract(target_name, batch)
-            used_fallback = True
-        # Only cache genuine Gemini output, never a transient-failure fallback.
-        if key is not None and not used_fallback:
+            continue
+        if key is not None:
             cache.put_extraction(key, extracted)
         out.extend(extracted)
 
