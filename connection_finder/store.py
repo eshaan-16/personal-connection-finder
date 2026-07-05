@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from .extract import RawCandidate
 from .models import ScoredCandidate, SearchResult, best_signal
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS search_cache (
+    cache_key   TEXT PRIMARY KEY,
+    created_at  TEXT NOT NULL,
+    payload     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS extraction_cache (
     cache_key   TEXT PRIMARY KEY,
     created_at  TEXT NOT NULL,
     payload     TEXT NOT NULL
@@ -125,6 +132,44 @@ class Store:
         payload = json.dumps([r.__dict__ for r in results])
         self.conn.execute(
             "INSERT OR REPLACE INTO search_cache (cache_key, created_at, payload) VALUES (?, ?, ?)",
+            (cache_key, _now(), payload),
+        )
+        self.conn.commit()
+
+    # ----- extraction cache (skips paid Gemini calls on re-runs) -----
+    def get_extraction(self, cache_key: str) -> Optional[list[RawCandidate]]:
+        if not self.use_cache:
+            return None
+        row = self.conn.execute(
+            "SELECT created_at, payload FROM extraction_cache WHERE cache_key = ?",
+            (cache_key,),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            created = datetime.fromisoformat(row["created_at"])
+        except ValueError:
+            return None
+        if datetime.now() - created > timedelta(hours=self.cache_ttl_hours):
+            return None
+        try:
+            payload = json.loads(row["payload"])
+        except json.JSONDecodeError:
+            return None
+        out: list[RawCandidate] = []
+        for item in payload:
+            try:
+                out.append(RawCandidate(**item))
+            except TypeError:
+                return None  # schema drift — treat as a miss
+        return out
+
+    def put_extraction(self, cache_key: str, raws: list[RawCandidate]) -> None:
+        if not self.use_cache:
+            return
+        payload = json.dumps([asdict(r) for r in raws])
+        self.conn.execute(
+            "INSERT OR REPLACE INTO extraction_cache (cache_key, created_at, payload) VALUES (?, ?, ?)",
             (cache_key, _now(), payload),
         )
         self.conn.commit()

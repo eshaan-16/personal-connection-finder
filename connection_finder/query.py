@@ -40,40 +40,37 @@ def build_queries(
     def add(text: str, category: str) -> None:
         specs.append(QuerySpec(text=" ".join(text.split()), signal_category=category))
 
+    # The query set is deliberately biased toward FAMILY and PERSONAL/NICHE ties
+    # (childhood, hometown, staff, neighbours) rather than famous business
+    # associates — the goal is harder-to-reach people, and celebrity co-founders
+    # get filtered out downstream anyway. There is no bare-name catch-all query
+    # (it just surfaced generic, famous results).
+
     # 1. Family — the closest ties, highest priority.
     add(f"{head} wife OR husband OR spouse", "family")
-    add(f"{head} brother OR sister OR sibling", "family")
-    add(f"{head} son OR daughter OR children", "family")
+    add(f"{head} brother OR sister OR cousin OR nephew OR niece", "family")
+    add(f'{head} son OR daughter OR "son-in-law" OR "daughter-in-law"', "family")
     add(f"{head} father OR mother OR parents", "family")
-    add(f"{head} family OR relatives", "family")
-    add(f"{head} married OR wedding", "family")
+    add(f"{head} family OR relatives OR siblings", "family")
 
-    # 2. Close friends.
-    add(f'{head} "close friend" OR "best friend"', "close_friend")
-    add(f'{head} "longtime friend" OR "childhood friend"', "close_friend")
-    add(f"{head} friend OR friendship", "close_friend")
+    # 2. Close friends and personal circle.
+    add(f'{head} "close friend" OR "childhood friend" OR "longtime friend"', "close_friend")
+    add(f'{head} neighbor OR "family friend"', "close_friend")
 
-    # 3. Niche / social sites — where personal ties surface most.
+    # 3. Niche / social sites — where lesser-known personal ties surface.
     add(f"{head} site:facebook.com", "close_friend")
     add(f"{head} site:instagram.com", "close_friend")
-    add(f"{head} site:twitter.com OR site:x.com", "close_friend")
 
-    # 4. Close professional co-occurrence (co-founders/partners are often close).
-    add(f"{head} co-founder OR cofounder", "professional_co_occurrence")
-    add(f"{head} colleague OR partner", "professional_co_occurrence")
-    add(f"{head} board member OR advisor", "professional_co_occurrence")
+    # 4. Personal history — childhood, hometown, school (surfaces obscure people).
+    add(f'{head} childhood OR hometown OR "grew up"', "incidental")
+    add(f'{head} roommate OR classmate OR "high school"', "institutional_affiliation")
 
-    # 5. Institutional affiliation.
-    add(f"{head} classmate OR alumni OR roommate", "institutional_affiliation")
+    # 5. Staff and everyday collaborators (assistants/aides are niche, reachable).
+    add(f'{head} assistant OR "chief of staff" OR spokesperson OR aide', "professional_co_occurrence")
 
-    # 6. Public social proof.
-    add(f'{head} mentor OR "early investor"', "social_proof")
-
-    # 7. Joint appearances.
-    add(f"{head} panel OR conference OR podcast", "joint_appearance")
-
-    # 8. Broad / incidental — the disambiguated name alone, catches the rest.
-    add(head, "incidental")
+    # 6. Public social proof and personal events (weddings/funerals name the circle).
+    add(f'{head} mentor OR "early supporter"', "social_proof")
+    add(f"{head} wedding OR funeral OR reunion", "joint_appearance")
 
     # Optional narrowing terms get their own incidental probes plus refine the
     # broad query toward the requested era/scene.

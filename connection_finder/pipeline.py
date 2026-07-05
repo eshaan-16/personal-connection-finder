@@ -8,7 +8,7 @@ from .config import Settings
 from .extract import GeminiExtractor, RawCandidate, extract_candidates, photo_candidates
 from .fetch import fetch_page
 from .images import ImageRef
-from .models import ScoredCandidate, SearchResult
+from .models import SIGNAL_WEIGHT, ScoredCandidate, SearchResult
 from .network import NetworkIndex, build_index
 from .pricing import CostEstimate, estimate_cost
 from .query import build_queries
@@ -30,6 +30,7 @@ class RunResult:
     provider_stats: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     cost: Optional[CostEstimate] = None
+    removed_famous: list[ScoredCandidate] = field(default_factory=list)
 
 
 def _log(message: str, verbose: bool) -> None:
@@ -57,6 +58,7 @@ def find_connectors(
     context = context.strip()
     target_key = normalize_name(target)
     warnings: list[str] = []
+    removed_famous: list[ScoredCandidate] = []
 
     store = Store(settings.db_path, cache_ttl_hours=settings.cache_ttl_hours, use_cache=settings.use_cache)
     try:
@@ -94,6 +96,9 @@ def find_connectors(
             industry=industry, period=period, providers=engine.provider_names, extractor=extractor_name,
         )
 
+        # 1) Run every query and DEDUPE results across queries by URL. Extracting
+        #    once over the deduped set — instead of once per query — is the single
+        #    biggest cost saving (a handful of Gemini calls instead of ~2/query).
         for spec in queries:
             if engine.all_disabled():
                 warnings.append("All search providers were rate-limited or failed; stopping early.")
@@ -106,35 +111,54 @@ def find_connectors(
                 warnings.append(f"Search failed for {spec.text!r}: {error}")
                 continue
             results_seen += len(results)
+            for result in results:
+                existing = results_by_url.get(result.url)
+                if existing is None:
+                    results_by_url[result.url] = result
+                elif SIGNAL_WEIGHT.get(result.signal_category, 0) > SIGNAL_WEIGHT.get(existing.signal_category, 0):
+                    existing.signal_category = result.signal_category  # keep strongest hint
 
-            batch: list[SearchResult] = []
-            for index, result in enumerate(results):
-                # Fetch full text for the top N results of each query (cheaper than
-                # fetching everything; snippets still cite the rest).
-                if settings.fetch_pages and index < settings.max_pages_per_query and not result.page_text:
-                    text, published, images = fetch_page(
-                        result.url,
-                        delay=settings.request_delay,
-                        allow_insecure_ssl=settings.allow_insecure_ssl,
-                        collect_images=want_photos,
-                    )
-                    result.page_text = text
-                    if not result.published_date and published:
-                        result.published_date = published
-                    for image in images:
-                        key = image.url.split("#", 1)[0]
-                        if key not in photo_seen:
-                            photo_seen.add(key)
-                            photo_pool.append((image, result.published_date))
-                results_by_url[result.url] = result
-                batch.append(result)
+        all_results = list(results_by_url.values())
 
-            if not batch:
-                continue
-            extracted = extract_candidates(target, context, batch, gemini=gemini, verbose=verbose)
-            raw_candidates.extend(extracted)
+        # 2) Fetch full text for a capped, priority-ordered subset — highest-signal
+        #    (family/close-friend/niche) pages first, once per URL. This bounds
+        #    both network fetches and the evidence handed to Gemini.
+        prioritized = sorted(
+            all_results,
+            key=lambda r: (SIGNAL_WEIGHT.get(r.signal_category, 0.3), len(r.snippet or "")),
+            reverse=True,
+        )
+        if settings.fetch_pages:
+            fetch_targets = prioritized[: settings.max_pages_total]
+            _log(f"Fetching {len(fetch_targets)} of {len(all_results)} pages "
+                 f"(cap {settings.max_pages_total})...", verbose)
+            for result in fetch_targets:
+                if result.page_text:
+                    continue
+                text, published, images = fetch_page(
+                    result.url, delay=settings.request_delay,
+                    allow_insecure_ssl=settings.allow_insecure_ssl, collect_images=want_photos,
+                )
+                result.page_text = text
+                if not result.published_date and published:
+                    result.published_date = published
+                for image in images:
+                    key = image.url.split("#", 1)[0]
+                    if key not in photo_seen:
+                        photo_seen.add(key)
+                        photo_pool.append((image, result.published_date))
+            feed = [r for r in fetch_targets if r.page_text]
+        else:
+            feed = prioritized[: settings.max_pages_total]  # snippet-only mode
 
-        # One bounded vision pass over uncaptioned photos gathered this run.
+        # 3) One batched, cached extraction pass over the bounded evidence set.
+        raw_candidates = extract_candidates(
+            target, context, feed, gemini=gemini,
+            batch_size=settings.extract_batch_size, deep_verify=settings.deep_verify,
+            cache=store, verbose=verbose,
+        )
+
+        # 4) One bounded vision pass over uncaptioned photos gathered this run.
         if want_photos and photo_pool:
             uncaptioned = [(img, date) for img, date in photo_pool if not img.has_caption()]
             _log(f"Analyzing up to {settings.max_photos} of {len(uncaptioned)} uncaptioned photo(s)...", verbose)
@@ -148,10 +172,15 @@ def find_connectors(
                                      max_photos=1, page_date=page_date, verbose=verbose)
                 )
 
-        scored = score_and_rank(
+        # 5) Score, then filter out well-known people so niche leads surface.
+        scored, removed_famous = score_and_rank(
             raw_candidates, results_by_url, network=network,
             stale_years=settings.stale_years, recent_years=settings.recent_years,
+            remove_famous=settings.remove_famous, max_fame=settings.max_fame,
         )
+        if removed_famous:
+            _log(f"Filtered {len(removed_famous)} well-known people "
+                 f"(fame >= {settings.max_fame}); keeping niche connections.", verbose)
         store.record(run_id, target_key, scored)
     finally:
         store.close()  # always release the sqlite/WAL handle, even on error
@@ -181,4 +210,5 @@ def find_connectors(
         provider_stats=engine.stats,
         warnings=warnings,
         cost=cost,
+        removed_famous=removed_famous,
     )

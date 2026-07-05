@@ -30,6 +30,35 @@ SIGNAL_WEIGHT = {
 
 CONFIDENCE_TIERS = ("high", "medium", "low")
 
+# Public-prominence buckets the extractor assigns to each person, and the fame
+# score each maps to (0 = private/unknown person, 1 = globally famous). Used to
+# filter out well-known people so niche, harder-to-reach connections surface.
+PROMINENCE_FAME = {
+    "household_name": 1.00,   # globally famous — most people would recognize them
+    "industry_known": 0.65,   # well known in their field / has own Wikipedia page
+    "niche": 0.30,            # some public footprint, not widely known
+    "private": 0.10,          # ordinary person, minimal public profile
+}
+_PROMINENCE_RANK = {"household_name": 3, "industry_known": 2, "niche": 1, "private": 0}
+# Unrated defaults to "niche" so a missing rating never over-filters a real lead.
+_DEFAULT_FAME = PROMINENCE_FAME["niche"]
+
+
+def fame_from_prominence(prominence: str) -> float:
+    return PROMINENCE_FAME.get((prominence or "").strip().lower(), _DEFAULT_FAME)
+
+
+def strongest_prominence(values) -> str:
+    """Return the most-prominent bucket among ``values`` (used when merging the
+    same person seen across several sources)."""
+    best, best_rank = "", -1
+    for value in values:
+        v = (value or "").strip().lower()
+        rank = _PROMINENCE_RANK.get(v, -1)
+        if rank > best_rank:
+            best, best_rank = v, rank
+    return best
+
 
 @dataclass
 class SearchResult:
@@ -81,6 +110,7 @@ class Candidate:
     signal_categories: set[str] = field(default_factory=set)
     sources: list[Source] = field(default_factory=list)
     extraction_confidence: float = 0.0  # max confidence reported by extractor
+    prominence: str = ""  # strongest public-prominence bucket seen for this person
 
     def add_source(self, source: Source) -> None:
         # Deduplicate by URL within a candidate.
@@ -106,6 +136,8 @@ class ScoredCandidate:
     distinct_domains: int = 0
     stale_only: bool = False      # only evidence is >STALE_YEARS old
     rationale: str = ""
+    fame: float = 0.0             # 0 = private/unknown, 1 = globally famous
+    prominence: str = ""          # the prominence bucket driving `fame`
 
     def to_dict(self) -> dict:
         cand = self.candidate
@@ -114,6 +146,8 @@ class ScoredCandidate:
             "score": round(self.score, 4),
             "tier": self.tier,
             "explanation": cand.explanation,
+            "fame": round(self.fame, 3),
+            "prominence": self.prominence,
             "signal_categories": sorted(cand.signal_categories),
             "primary_signal": best_signal(cand.signal_categories),
             "in_network": self.in_network,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Optional
 
 from .dates import years_old
@@ -12,6 +13,8 @@ from .models import (
     SearchResult,
     Source,
     best_signal,
+    fame_from_prominence,
+    strongest_prominence,
 )
 from .network import NetworkIndex, NetworkMatch
 from .util import normalize_name, registrable_domain, squeeze
@@ -24,6 +27,9 @@ W_CONFIDENCE = 0.18
 
 NETWORK_BOOST = {1: 0.12, 2: 0.06}
 STALE_PENALTY = 0.45
+# Nudge niche/unknown people up and famous people down, so the ranking favours
+# the harder-to-reach connections the user actually wants.
+OBSCURITY_BONUS = 0.10
 
 TIER_HIGH = 0.62
 TIER_MEDIUM = 0.42
@@ -73,6 +79,7 @@ def merge_candidates(
         )
         candidate.add_source(source)
         candidate.extraction_confidence = max(candidate.extraction_confidence, raw.confidence)
+        candidate.prominence = strongest_prominence([candidate.prominence, raw.prominence])
         explanation, method = _better_explanation(
             candidate.explanation, raw, explanation_method[key]
         )
@@ -86,6 +93,7 @@ def _fold_into(src: Candidate, dst: Candidate) -> None:
     for source in src.sources:
         dst.add_source(source)
     dst.extraction_confidence = max(dst.extraction_confidence, src.extraction_confidence)
+    dst.prominence = strongest_prominence([dst.prominence, src.prominence])
     if src.explanation and not dst.explanation:
         dst.explanation = src.explanation
 
@@ -194,12 +202,7 @@ def _consolidate_subsets(candidates: list[Candidate]) -> list[Candidate]:
         r = root(i)
         if r == i:
             continue
-        src, dst = entries[i]["cand"], entries[r]["cand"]
-        for source in src.sources:
-            dst.add_source(source)
-        dst.extraction_confidence = max(dst.extraction_confidence, src.extraction_confidence)
-        if src.explanation and not dst.explanation:
-            dst.explanation = src.explanation
+        _fold_into(entries[i]["cand"], entries[r]["cand"])
 
     return [entries[i]["cand"] for i in range(n) if i not in absorbed]
 
@@ -220,6 +223,44 @@ def _corroboration_factor(distinct_domains: int) -> float:
         return 0.0
     # 1 domain -> ~0.43, 2 -> ~0.68, 3 -> ~0.86, 4+ -> 1.0
     return min(1.0, math.log2(1 + distinct_domains) / math.log2(5))
+
+
+_WIKI_SLUG_RE = re.compile(r"/wiki/([^?#]+)")
+
+
+def _has_own_wikipedia(candidate: Candidate) -> bool:
+    """True if any source is the person's OWN Wikipedia article — a strong,
+    free signal that they are a notable public figure. (Merely being cited on
+    the target's Wikipedia page does not count.)"""
+    name_toks = set(candidate.name_key.split())
+    if not name_toks:
+        return False
+    for source in candidate.sources:
+        if "wikipedia.org" not in (registrable_domain(source.url) or ""):
+            continue
+        match = _WIKI_SLUG_RE.search(source.url)
+        if not match:
+            continue
+        slug_toks = set(normalize_name(match.group(1).replace("_", " ")).split())
+        # The article title must actually be this person (their name tokens are
+        # a subset of the article title's tokens).
+        if slug_toks and name_toks.issubset(slug_toks):
+            return True
+    return False
+
+
+def _fame_score(candidate: Candidate, distinct_domains: int) -> float:
+    """Estimate how well-known a person is, 0 (private) .. 1 (globally famous).
+
+    Primary signal is the extractor's prominence bucket; a dedicated Wikipedia
+    article and very broad multi-domain coverage bump it up. No extra API calls.
+    """
+    fame = fame_from_prominence(candidate.prominence)
+    if _has_own_wikipedia(candidate):
+        fame = max(fame, 0.75)  # own Wikipedia article => at least industry-known
+    if distinct_domains >= 6:
+        fame = min(1.0, fame + 0.10)  # covered everywhere => famous
+    return max(0.0, min(1.0, fame))
 
 
 def score_candidate(
@@ -257,7 +298,12 @@ def score_candidate(
     boost = NETWORK_BOOST.get(match.degree or 0, 0.0)
     if match.approximate:
         boost *= 0.5  # name-only match — don't fully trust it
-    score = min(1.0, base + boost)
+
+    # Favour niche / hard-to-reach people: obscurity nudges the score up, fame
+    # nudges it down, so well-known people rank lower even when kept.
+    fame = _fame_score(candidate, distinct_domains)
+    obscurity_adj = OBSCURITY_BONUS * (1.0 - 2.0 * fame)  # +bonus at fame 0, -bonus at fame 1
+    score = max(0.0, min(1.0, base + boost + obscurity_adj))
 
     if score >= TIER_HIGH:
         tier = "high"
@@ -272,6 +318,7 @@ def score_candidate(
         recency_age=most_recent_age,
         stale_only=stale_only,
         match=match,
+        prominence=candidate.prominence,
     )
 
     return ScoredCandidate(
@@ -287,11 +334,16 @@ def score_candidate(
         distinct_domains=distinct_domains,
         stale_only=stale_only,
         rationale=rationale,
+        fame=fame,
+        prominence=candidate.prominence,
     )
 
 
-def _rationale(*, signal, distinct_domains, recency_age, stale_only, match: NetworkMatch) -> str:
+def _rationale(*, signal, distinct_domains, recency_age, stale_only, match: NetworkMatch,
+               prominence: str = "") -> str:
     parts = [signal.replace("_", " ")]
+    if prominence:
+        parts.append(prominence.replace("_", " "))
     if distinct_domains >= 2:
         parts.append(f"{distinct_domains} independent sources")
     else:
@@ -320,14 +372,30 @@ def score_and_rank(
     network: Optional[NetworkIndex] = None,
     stale_years: int = 15,
     recent_years: int = 5,
-) -> list[ScoredCandidate]:
+    remove_famous: bool = False,
+    max_fame: float = 0.6,
+) -> tuple[list[ScoredCandidate], list[ScoredCandidate]]:
+    """Return (kept, removed_famous).
+
+    When ``remove_famous`` is set, anyone whose fame score is >= ``max_fame`` is
+    pulled out of the main list (they're easy to find on your own) and returned
+    separately so the caller can report how many were filtered. Both lists are
+    sorted best-first.
+    """
     candidates = merge_candidates(raws, results_by_url)
     scored = [
         score_candidate(c, network=network, stale_years=stale_years, recent_years=recent_years)
         for c in candidates
     ]
-    scored.sort(
-        key=lambda s: (s.score, s.distinct_domains, s.most_recent_date),
-        reverse=True,
-    )
-    return scored
+
+    kept, removed = scored, []
+    if remove_famous:
+        kept = [s for s in scored if s.fame < max_fame]
+        removed = [s for s in scored if s.fame >= max_fame]
+
+    for group in (kept, removed):
+        group.sort(
+            key=lambda s: (s.score, s.distinct_domains, s.most_recent_date),
+            reverse=True,
+        )
+    return kept, removed

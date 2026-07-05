@@ -32,9 +32,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--providers", help="Comma list to restrict providers: brave,google_cse,bing")
     parser.add_argument("--max-results", type=int, default=6, help="Results per query (default 6)")
-    parser.add_argument("--max-pages", type=int, default=3, help="Pages to fetch full text per query (default 3)")
+    parser.add_argument("--max-pages", type=int, default=2, help="Pages to fetch full text per query (default 2)")
+    parser.add_argument("--max-pages-total", type=int, default=16,
+                        help="Hard cap on page fetches + extraction evidence per run (default 16)")
+    parser.add_argument("--batch-size", type=int, default=8,
+                        help="Evidence items per Gemini extraction call (default 8)")
     parser.add_argument("--max-queries", type=int, default=0, help="Cap total queries (0 = full batch)")
     parser.add_argument("--no-fetch", action="store_true", help="Skip page fetch; use snippets only (faster/cheaper)")
+
+    # Fame filtering: surface niche connections, drop well-known people.
+    parser.add_argument("--max-fame", type=float, default=0.6,
+                        help="Drop people at/above this fame score (1.0=household name, "
+                             "0.65=industry-known, 0.3=niche). Default 0.6.")
+    parser.add_argument("--keep-famous", action="store_true",
+                        help="Do NOT remove well-known people (keep everyone, just rank niche higher)")
+    parser.add_argument("--deep-verify", action="store_true",
+                        help="Run an extra paid LLM verification pass (higher quality, higher cost)")
     parser.add_argument("--analyze-photos", action="store_true",
                         help="Vision-analyze uncaptioned photos for named people (needs GEMINI_API_KEY)")
     parser.add_argument("--max-photos", type=int, default=4, help="Max photos to vision-analyze per run (default 4)")
@@ -52,6 +65,11 @@ def _build_settings(args) -> Settings:
     return Settings.from_env(
         max_results_per_query=args.max_results,
         max_pages_per_query=args.max_pages,
+        max_pages_total=args.max_pages_total,
+        extract_batch_size=args.batch_size,
+        deep_verify=args.deep_verify,
+        remove_famous=not args.keep_famous,
+        max_fame=args.max_fame,
         max_queries=args.max_queries,
         fetch_pages=not args.no_fetch,
         analyze_photos=args.analyze_photos,

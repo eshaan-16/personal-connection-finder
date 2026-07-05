@@ -143,7 +143,7 @@ def test_scoring_and_report():
         index = build_index(csv_path, "", verbose=False)
         check("network index loads", index.size[0] == 1)
 
-        scored = score_and_rank(raws, results_by_url, network=index, stale_years=15, recent_years=5)
+        scored, _removed = score_and_rank(raws, results_by_url, network=index, stale_years=15, recent_years=5)
         check("scoring returns candidates", len(scored) >= 2)
         check("scores are sorted desc", all(
             scored[i].score >= scored[i + 1].score for i in range(len(scored) - 1)))
@@ -163,7 +163,7 @@ def test_scoring_and_report():
 def test_store():
     raws, results = test_extraction()
     results_by_url = {r.url: r for r in results}
-    scored = score_and_rank(raws, results_by_url, network=None)
+    scored, _removed = score_and_rank(raws, results_by_url, network=None)
     with tempfile.TemporaryDirectory() as tmp:
         db = os.path.join(tmp, "db.sqlite3")
         store = Store(db)
@@ -428,9 +428,52 @@ def test_images():
           photo_candidates("Bill Gates", "Microsoft", imgs, gemini=None, max_photos=4) == [])
 
 
+# --- 10. Fame filtering (remove well-known people, keep niche) ------------- #
+def test_fame():
+    from connection_finder.extract import RawCandidate, _plausible_person_name
+    from connection_finder.score import score_and_rank, _has_own_wikipedia, merge_candidates
+
+    raws = [
+        RawCandidate(name="Melinda French Gates", explanation="ex-wife", signal_category="family",
+                     confidence=0.9, citation_url="https://a.com/1", prominence="household_name"),
+        RawCandidate(name="Rory Gates", explanation="son", signal_category="family",
+                     confidence=0.8, citation_url="https://b.com/2", prominence="private"),
+        RawCandidate(name="Kristi Blake", explanation="sister", signal_category="family",
+                     confidence=0.8, citation_url="https://c.com/3", prominence="niche"),
+    ]
+    kept, removed = score_and_rank(raws, {}, remove_famous=True, max_fame=0.6)
+    kept_names = {s.candidate.name for s in kept}
+    removed_names = {s.candidate.name for s in removed}
+    check("household-name person removed", "Melinda French Gates" in removed_names)
+    check("niche/private people kept", {"Rory Gates", "Kristi Blake"} <= kept_names)
+    check("kept carry a fame score", all(0.0 <= s.fame <= 1.0 for s in kept))
+    check("removed marked more famous than kept",
+          all(r.fame >= 0.6 for r in removed) and all(k.fame < 0.6 for k in kept))
+
+    # --keep-famous: nobody is removed.
+    kept2, removed2 = score_and_rank(raws, {}, remove_famous=False)
+    check("keep-famous keeps everyone", len(kept2) == 3 and removed2 == [])
+
+    # A dedicated Wikipedia article marks someone famous even if rated 'private'.
+    raws_wiki = [RawCandidate(name="Jane Q Roe", explanation="x", signal_category="incidental",
+                 confidence=0.5, citation_url="https://en.wikipedia.org/wiki/Jane_Q_Roe",
+                 prominence="private")]
+    merged = merge_candidates(raws_wiki, {})
+    check("own wikipedia article detected", _has_own_wikipedia(merged[0]))
+    _, removed3 = score_and_rank(raws_wiki, {}, remove_famous=True, max_fame=0.6)
+    check("own wikipedia article => filtered as famous",
+          any(s.candidate.name == "Jane Q Roe" for s in removed3))
+
+    # Free person-name backstop keeps people, drops headline/label junk.
+    check("backstop keeps a real name", _plausible_person_name("Mary Jane Watson"))
+    check("backstop keeps name with suffix", _plausible_person_name("William Henry Gates II"))
+    check("backstop drops headline label", not _plausible_person_name("When To Use"))
+    check("backstop drops single token", not _plausible_person_name("Melinda"))
+
+
 def main() -> int:
     for test in (test_queries, test_dates, test_engine, test_scoring_and_report,
-                 test_store, test_config, test_fixes, test_images):
+                 test_store, test_config, test_fixes, test_images, test_fame):
         print(f"\n== {test.__name__} ==")
         test()
     print(f"\n{PASS} passed, {FAIL} failed")

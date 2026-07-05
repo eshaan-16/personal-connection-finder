@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import sys
@@ -26,6 +27,7 @@ class RawCandidate:
     evidence_quote: str = ""
     published_date: str = ""
     method: str = "heuristic"  # or "gemini"
+    prominence: str = ""  # household_name | industry_known | niche | private
 
 
 _VALID_CATEGORIES = set(SIGNAL_CATEGORIES)
@@ -127,6 +129,50 @@ def _has_non_name_word(name: str) -> bool:
     return any(tok.lower() in _NON_NAME_WORDS for tok in name.split())
 
 
+# Function/headline words that never appear as a token in a real person's name.
+# Lets the free person-name backstop reject obvious labels ("When To Use") so we
+# can skip the paid LLM verification pass by default.
+_NON_PERSON_TOKENS = {
+    "when", "to", "use", "using", "used", "how", "why", "what", "which", "who",
+    "whom", "where", "get", "getting", "best", "top", "guide", "tips", "vs",
+    "versus", "is", "are", "was", "were", "your", "you", "our", "about",
+    "contact", "read", "learn", "sign", "click", "here", "view", "show", "hide",
+    "faq", "review", "overview", "for", "with", "from", "into", "list",
+    "interview", "meeting", "event", "summit", "episode", "story", "report",
+    "profile", "news",
+}
+_NAME_PARTICLES = {
+    "van", "von", "de", "del", "della", "di", "da", "la", "le", "bin", "al",
+    "der", "ten", "ter", "du", "dos", "das", "mac", "mc", "o",
+}
+
+
+def _plausible_person_name(name: str) -> bool:
+    """Free, lenient check that an LLM-returned string is really a person's name.
+
+    Looser than looks_like_person_name (allows middle names and suffixes), it
+    only kills obvious non-people — headlines, labels, product names — so the
+    paid verification pass can stay off by default.
+    """
+    tokens = name.strip().split()
+    if not (2 <= len(tokens) <= 5):
+        return False
+    key = name_tokens(name)
+    if len(key) < 2:
+        return False
+    if any(tok in _NON_NAME_WORDS or tok in _NON_PERSON_TOKENS for tok in key):
+        return False
+    caps = 0
+    for index, tok in enumerate(tokens):
+        if tok[:1].isupper():
+            caps += 1
+        elif tok.lower() in _NAME_PARTICLES and index > 0:
+            continue  # lowercase particle mid-name ("van", "de") is fine
+        else:
+            return False
+    return caps >= 2
+
+
 def heuristic_extract(target_name: str, results: list[SearchResult]) -> list[RawCandidate]:
     """Precision-first extraction without an LLM.
 
@@ -223,6 +269,16 @@ Definitions (prioritise family and close_friend — they are what matters most):
 - joint_appearance: shared panel, conference, podcast, interview, event.
 - incidental: any other genuine, specific personal connection not above.
 
+For EACH person also rate their public prominence, so well-known people can be
+filtered out (the user wants NICHE, harder-to-reach connections, not celebrities):
+- household_name: globally famous — most people worldwide would recognize the
+  name (e.g. a top tech CEO, a head of state, an A-list celebrity).
+- industry_known: well known within their field, or clearly has their own
+  Wikipedia article, but not a global household name.
+- niche: a real public footprint (some articles, a company bio) but not widely
+  known.
+- private: an ordinary person with a minimal public profile.
+
 RELEVANCE IS EVERYTHING. Only return a person if the evidence explicitly ties
 THEM to the TARGET by name. Reject and DO NOT return:
 - Anyone who merely appears in the same article, list, or webpage without a
@@ -253,6 +309,7 @@ JSON schema (no markdown, no commentary):
       "name": "Full Name",
       "relationship": "one concise line stating exactly how they connect to the target",
       "signal_category": "family",
+      "prominence": "household_name | industry_known | niche | private",
       "confidence": 0.0,
       "citation_url": "https://... (must be one of the evidence URLs)",
       "evidence_quote": "short verbatim quote from the evidence that names both people",
@@ -554,6 +611,8 @@ class GeminiExtractor:
                 continue
             if citation not in evidence_urls:
                 continue
+            if not _plausible_person_name(name):
+                continue  # free backstop: drop headlines/labels the model slipped in
             explanation = squeeze(str(person.get("relationship", "")))
             ev_quote = squeeze(str(person.get("evidence_quote", "")))
             if is_sensitive(explanation, ev_quote, name):
@@ -571,6 +630,7 @@ class GeminiExtractor:
                 evidence_quote=ev_quote[:280],
                 published_date=to_iso_date(str(person.get("published_date", "")).strip()),
                 method="gemini",
+                prominence=str(person.get("prominence", "")).strip().lower(),
             ))
         return out
 
@@ -734,36 +794,79 @@ def photo_candidates(
     return out
 
 
+def _chunk(items: list, size: int):
+    for i in range(0, len(items), max(1, size)):
+        yield items[i:i + size]
+
+
+def _batch_cache_key(target_name: str, context: str, model: str,
+                     batch: list[SearchResult]) -> str:
+    """Stable key for one extraction batch so identical evidence never pays for a
+    second Gemini call (across re-runs). Keyed on the URLs, not page text, since
+    the search cache already pins URLs for a given query set."""
+    urls = "|".join(sorted({r.url for r in batch}))
+    raw = "|".join([normalize_name(target_name), context.strip().lower(), model, urls])
+    return "extract:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def extract_candidates(
     target_name: str,
     context: str,
     results: list[SearchResult],
     *,
     gemini: GeminiExtractor | None,
+    batch_size: int = 8,
+    deep_verify: bool = False,
+    cache=None,
     verbose: bool = True,
 ) -> list[RawCandidate]:
-    """Use Gemini when available with an AI verification pass; heuristic otherwise.
+    """Extract connected people from ALL evidence in a few batched Gemini calls.
 
-    When Gemini is active every extracted candidate goes through verify_candidates
-    before being returned, which filters out non-people and unverified connections.
-    The heuristic fallback only activates when a Gemini call raises an HttpError.
+    Cost controls:
+    - Evidence is deduped/relevance-filtered upstream and processed in batches of
+      ``batch_size`` so one run makes a handful of calls, not one per query.
+    - ``cache`` (a Store) memoizes each batch by its evidence URLs, so re-runs
+      that hit the search cache pay nothing for extraction.
+    - The separate LLM verification pass is OFF by default (``deep_verify``); the
+      strict extraction prompt plus a free person-name backstop already filter
+      non-people. Turn it on for a paranoid, higher-cost pass.
+
+    Falls back to the no-LLM heuristic per batch on a Gemini error.
     """
     if not results:
         return []
     if gemini is None:
         return heuristic_extract(target_name, results)
-    try:
-        extracted = gemini.extract(target_name, context, results)
-        if extracted:
-            extracted = gemini.verify_candidates(target_name, context, extracted)
-        return extracted
-    except HttpError as error:
-        if verbose:
-            print(f"  [gemini] extraction failed ({error}); heuristic fallback.", file=sys.stderr)
-        heuristic = heuristic_extract(target_name, results)
-        if heuristic:
-            try:
-                heuristic = gemini.verify_candidates(target_name, context, heuristic)
-            except HttpError:
-                pass
-        return heuristic
+
+    relevant = _relevant_results(target_name, results)
+    if not relevant:
+        return []
+
+    out: list[RawCandidate] = []
+    for batch in _chunk(relevant, batch_size):
+        key = _batch_cache_key(target_name, context, gemini.model, batch) if cache else None
+        if key is not None:
+            cached = cache.get_extraction(key)
+            if cached is not None:
+                out.extend(cached)
+                continue
+        used_fallback = False
+        try:
+            extracted = gemini.extract(target_name, context, batch)
+        except HttpError as error:
+            if verbose:
+                print(f"  [gemini] extraction failed ({error}); heuristic fallback for this batch.",
+                      file=sys.stderr)
+            extracted = heuristic_extract(target_name, batch)
+            used_fallback = True
+        # Only cache genuine Gemini output, never a transient-failure fallback.
+        if key is not None and not used_fallback:
+            cache.put_extraction(key, extracted)
+        out.extend(extracted)
+
+    if deep_verify and out and gemini is not None:
+        try:
+            out = gemini.verify_candidates(target_name, context, out)
+        except HttpError:
+            pass
+    return out

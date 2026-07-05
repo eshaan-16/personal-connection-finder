@@ -42,9 +42,13 @@ def render_console(result: RunResult, limit: int = 25) -> str:
             + (f" — {search_bits}" if search_bits else "") + ")"
         )
         lines.append("  (estimate — see pricing.py; cached searches are free)")
+    if result.removed_famous:
+        names = ", ".join(s.candidate.name for s in result.removed_famous[:8])
+        extra = "" if len(result.removed_famous) <= 8 else f", +{len(result.removed_famous) - 8} more"
+        lines.append(f"Filtered {len(result.removed_famous)} well-known people (findable on your own): {names}{extra}")
     lines.append("")
     if not result.scored:
-        lines.append("No candidate connectors were found. Try a broader context or add a provider key.")
+        lines.append("No niche connectors were found. Try a broader context, raise --max-fame, or add a provider key.")
         return "\n".join(lines)
 
     lines.append("Rank  Tier  Score  Network                       Candidate")
@@ -124,6 +128,7 @@ def write_json(result: RunResult, path: str) -> None:
         "warnings": result.warnings,
         "cost_estimate": result.cost.as_dict() if result.cost else None,
         "candidates": [item.to_dict() for item in result.scored],
+        "removed_famous": [item.to_dict() for item in result.removed_famous],
     }
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
