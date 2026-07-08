@@ -4,28 +4,34 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 # Signal categories, highest-trust first. Every source and candidate is tagged
-# with one of these. The goal is CLOSE personal connections (family and friends
-# rank highest), then professional/institutional ties, then incidental mentions.
+# with one of these. The goal is a target's reachable NICHE circle — friends,
+# schoolmates, and early-venture collaborators rank highest; family is kept but
+# demoted (the user can find close family on their own).
 SIGNAL_CATEGORIES = (
-    "family",                      # spouse, sibling, parent, adult child, relative
     "close_friend",                # close / longtime / childhood personal friend
-    "professional_co_occurrence",  # co-founder, board member, advisor, colleague
-    "institutional_affiliation",   # alumni, fellowship, classmate, lab
+    "school_tie",                  # classmate, roommate, dorm, fraternity, lab
+    "early_venture",               # co-founder/early employee of a pre-fame venture
+    "professional_co_occurrence",  # colleague, board member, advisor, business partner
+    "institutional_affiliation",   # alumni, fellowship, cohort (broader than school_tie)
     "social_proof",                # mentor, "early investor", "first believed in"
+    "family",                      # spouse, sibling, parent, adult child, relative
     "joint_appearance",            # shared panel, conference, podcast
     "incidental",                  # broad/incidental: yearbook, neighborhood, misc
 )
 
-# Relative trust of each category. Family + close friends are exactly what this
-# tool exists to surface, so they rank highest; incidental mentions lowest.
+# Relative trust of each category. Friends, school ties, and early ventures are
+# exactly what this tool now exists to surface, so they rank highest; family is
+# intentionally demoted below professional/school ties; incidental lowest.
 SIGNAL_WEIGHT = {
-    "family": 1.00,
-    "close_friend": 0.95,
-    "professional_co_occurrence": 0.90,
-    "institutional_affiliation": 0.78,
-    "social_proof": 0.72,
+    "close_friend": 1.00,
+    "school_tie": 0.95,
+    "early_venture": 0.93,
+    "professional_co_occurrence": 0.85,
+    "institutional_affiliation": 0.82,
+    "social_proof": 0.78,
+    "family": 0.70,
     "joint_appearance": 0.58,
-    "incidental": 0.30,
+    "incidental": 0.35,
 }
 
 CONFIDENCE_TIERS = ("high", "medium", "low")

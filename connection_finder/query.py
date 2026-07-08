@@ -40,52 +40,40 @@ def build_queries(
     def add(text: str, category: str) -> None:
         specs.append(QuerySpec(text=" ".join(text.split()), signal_category=category))
 
-    # The query set is deliberately biased toward FAMILY and PERSONAL/NICHE ties
-    # (childhood, hometown, staff, neighbours) rather than famous business
-    # associates — the goal is harder-to-reach people, and celebrity co-founders
-    # get filtered out downstream anyway. There is no bare-name catch-all query
-    # (it just surfaced generic, famous results).
+    # The query set is biased toward FRIENDS, SCHOOL TIES, and EARLY VENTURES —
+    # the reachable niche circle — not family or famous associates (family is
+    # demoted; celebrities get filtered downstream). No bare-name catch-all.
 
-    # 1. Family — the closest ties, highest priority.
-    add(f"{head} wife OR husband OR spouse", "family")
-    add(f"{head} brother OR sister OR cousin OR nephew OR niece", "family")
-    add(f'{head} son OR daughter OR "son-in-law" OR "daughter-in-law"', "family")
-    add(f"{head} father OR mother OR parents", "family")
-    add(f"{head} family OR relatives OR siblings", "family")
+    # 1. Close friends and personal circle (highest priority).
+    add(f'{head} "close friend" OR "childhood friend" OR "longtime friend" OR "best friend"', "close_friend")
+    add(f'{head} "best man" OR "maid of honor" OR godfather OR godmother OR confidant', "close_friend")
+    add(f'{head} neighbor OR "grew up with" OR "old friend"', "close_friend")
 
-    # 2. Close friends and personal circle.
-    add(f'{head} "close friend" OR "childhood friend" OR "longtime friend"', "close_friend")
-    add(f'{head} neighbor OR "family friend"', "close_friend")
+    # 2. School ties — classmates, roommates, dorm/fraternity, school friends.
+    add(f'{head} roommate OR classmate OR dormmate OR "college friend"', "school_tie")
+    add(f'{head} fraternity OR sorority OR "high school" OR yearbook', "school_tie")
+    add(f'{head} "went to school with" OR schoolmate OR "lab partner" OR "study group"', "school_tie")
 
-    # 3. Niche / social sites — where lesser-known personal ties surface.
+    # 3. Early ventures — co-founders/early employees of pre-fame startups.
+    add(f'{head} "early employee" OR "co-founder" OR "first hire" OR "founding team"', "early_venture")
+    add(f'{head} "first company" OR "first startup" OR "early venture" OR "before he was"', "early_venture")
+    add(f'{head} "started" OR "launched" OR "early days" OR "in the beginning"', "early_venture")
+
+    # 4. Deep WORK history — former colleagues, early jobs, direct reports.
+    add(f'{head} "worked with" OR "worked alongside" OR "former colleague"', "professional_co_occurrence")
+    add(f'{head} "early career" OR "first job" OR "hired by" OR "reported to"', "professional_co_occurrence")
+    add(f'{head} assistant OR "chief of staff" OR aide OR mentor OR protege', "professional_co_occurrence")
+
+    # 5. Niche / social sites — where lesser-known personal ties surface.
     add(f"{head} site:facebook.com", "close_friend")
-    add(f"{head} site:instagram.com", "close_friend")
+    add(f"{head} site:instagram.com OR site:linkedin.com", "professional_co_occurrence")
 
-    # 4. Personal history — childhood, hometown, school (surfaces obscure people).
-    add(f'{head} childhood OR hometown OR "grew up"', "incidental")
-    add(f'{head} roommate OR classmate OR "high school"', "institutional_affiliation")
-
-    # 5. Deep WORK history — former colleagues, early jobs, direct reports. These
-    #    surface real working relationships beyond the famous co-founders.
-    add(f'{head} "worked with" OR "worked for" OR "worked alongside"', "professional_co_occurrence")
-    add(f'{head} "former colleague" OR "former boss" OR "former employee"', "professional_co_occurrence")
-    add(f'{head} "early career" OR "first job" OR "started his career" OR "started her career"', "professional_co_occurrence")
-    add(f'{head} "hired by" OR "reported to" OR "worked under" OR "right-hand"', "professional_co_occurrence")
-
-    # 6. Staff and everyday collaborators (assistants/aides are niche, reachable).
-    add(f'{head} assistant OR "chief of staff" OR spokesperson OR aide OR secretary', "professional_co_occurrence")
-
-    # 7. OLD / past personal relationships — former ties and reconnections.
-    add(f'{head} "old friend" OR "used to" OR reconnected OR "back then"', "incidental")
-    add(f'{head} former OR ex OR "years ago" OR "early days"', "incidental")
-
-    # 8. Deep personal circle — the people at private milestones.
-    add(f'{head} "best man" OR "maid of honor" OR godfather OR godmother', "close_friend")
-    add(f'{head} confidant OR "inner circle" OR mentor OR protege', "close_friend")
-
-    # 9. Public social proof and personal events (weddings/funerals name the circle).
+    # 6. Social proof and personal events (surface the circle, not the family).
     add(f'{head} "early supporter" OR "believed in" OR "first backer"', "social_proof")
-    add(f"{head} wedding OR funeral OR reunion OR memorial", "joint_appearance")
+    add(f"{head} reunion OR memorial OR tribute OR alumni", "joint_appearance")
+
+    # 7. Family — kept but minimal (demoted; user wants friends over family).
+    add(f"{head} family OR sibling OR spouse OR relatives", "family")
 
     # Optional narrowing terms get their own incidental probes plus refine the
     # broad query toward the requested era/scene.

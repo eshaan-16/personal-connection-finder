@@ -29,6 +29,26 @@ Interactive (prompts for target + context):
 python run.py
 ```
 
+### Web UI (with a live cost slider)
+
+```bash
+python serve.py          # then open http://127.0.0.1:8000
+```
+
+A single, dependency-free page: type a **person** and **context**, pick a
+**mode** (Economy = `flash-lite`, cheapest · Balanced/Accurate = `flash`), and
+drag the **connections slider** — it shows the estimated cost *before* you run.
+Cost scales with the number of connections; re-runs of the same person are ~free
+(extraction is cached). Search is free under Brave's monthly tier.
+
+### What it finds
+
+Results are biased toward a target's **reachable niche circle** — close friends,
+schoolmates/roommates, early-venture collaborators, and work ties — and away from
+famous people (filtered out; they're easy to find yourself) and immediate family
+(kept but demoted). Set `--keep-famous`, `--max-fame`, `--min-results`, or the UI
+mode/slider to tune.
+
 ## How it works (the pipeline)
 
 1. **Query construction** — builds a disambiguated batch across five signal

@@ -48,13 +48,13 @@ def test_queries():
     texts = [s.text for s in specs]
     cats = {s.signal_category for s in specs}
     check("queries quote target+context", all('"Bill Gates"' in t and '"Microsoft"' in t for t in texts))
-    check("queries cover 5 categories", {
-        "professional_co_occurrence", "institutional_affiliation",
-        "social_proof", "joint_appearance", "incidental",
+    check("queries prioritise friends/school/venture/work", {
+        "close_friend", "school_tie", "early_venture", "professional_co_occurrence",
     } <= cats)
-    check("queries target family + close friends", {"family", "close_friend"} <= cats)
-    check("family query present", any(w in t.lower() for t in texts for w in ("wife", "spouse", "sibling", "family")))
-    check("niche/social site query present", any("site:facebook.com" in t or "site:instagram.com" in t for t in texts))
+    check("family still covered (but demoted)", "family" in cats)
+    check("school-tie query present", any(w in t.lower() for t in texts for w in ("roommate", "classmate", "fraternity", "schoolmate")))
+    check("early-venture query present", any(w in t.lower() for t in texts for w in ("early employee", "first startup", "founding team", "first hire")))
+    check("niche/social site query present", any("site:facebook.com" in t or "site:linkedin.com" in t for t in texts))
     check("queries are deduped", len(texts) == len(set(texts)))
     check("period probe present", any("2010s" in t for t in texts))
 
@@ -484,9 +484,31 @@ def test_fame():
     check("backstop drops single token", not _plausible_person_name("Melinda"))
 
 
+# --- 11. Cost planner + web UI ---------------------------------------------- #
+def test_pricing_ui():
+    from connection_finder.pricing import plan_run, pages_for_connections
+    import connection_finder.webui as webui
+
+    check("more connections => more evidence pages", pages_for_connections(30) > pages_for_connections(10))
+    lo = plan_run(10, mode="economy", n_queries=17)
+    hi = plan_run(30, mode="economy", n_queries=17)
+    check("cost scales up with connections", hi.est_total_cost > lo.est_total_cost)
+    econ = plan_run(20, mode="economy", n_queries=17)
+    bal = plan_run(20, mode="balanced", n_queries=17)
+    check("economy cheaper than balanced", econ.est_total_cost < bal.est_total_cost)
+    check("economy uses flash-lite", econ.model == "gemini-2.5-flash-lite")
+    check("free-tier search => $0 search", bal.est_search_cost == 0.0)
+    check("min_results tracks the slider", plan_run(22, mode="balanced", n_queries=17).min_results == 22)
+    check("cached re-run estimate is ~free",
+          plan_run(20, mode="balanced", n_queries=17, cached_fraction=1.0).est_gemini_cost == 0.0)
+    check("ui page renders with slider + cost", "Connection Finder" in webui.PAGE
+          and 'id="slider"' in webui.PAGE and 'id="costBig"' in webui.PAGE)
+
+
 def main() -> int:
     for test in (test_queries, test_dates, test_engine, test_scoring_and_report,
-                 test_store, test_config, test_fixes, test_images, test_fame):
+                 test_store, test_config, test_fixes, test_images, test_fame,
+                 test_pricing_ui):
         print(f"\n== {test.__name__} ==")
         test()
     print(f"\n{PASS} passed, {FAIL} failed")

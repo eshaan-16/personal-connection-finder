@@ -260,15 +260,24 @@ Classify each into exactly one signal_category:
 
 {", ".join(SIGNAL_CATEGORIES)}
 
-Definitions (prioritise family and close_friend — they are what matters most):
-- family: spouse/partner, sibling, parent, adult child, or other relative.
-- close_friend: a close, longtime, or childhood friend; a personal confidant.
-- professional_co_occurrence: co-founder, close colleague, board member,
-  advisor, investor/investee, business partner.
-- institutional_affiliation: same school/university, alumni, fellowship,
-  classmate, roommate, lab, accelerator cohort.
+PRIORITISE FRIENDS, SCHOOLMATES, and EARLY-VENTURE collaborators. These niche,
+harder-to-reach people are the goal. Family is welcome but LOWER priority — the
+user can find close family on their own, so do not let family crowd out friends.
+
+Definitions:
+- close_friend: a close, longtime, or childhood friend; a personal confidant;
+  best man / maid of honor / godparent.
+- school_tie: classmate, roommate, dormmate, fraternity/sorority brother/sister,
+  lab partner, thesis advisor/advisee, or a specific friend from school/college.
+- early_venture: co-founder, early employee, or early collaborator on one of the
+  target's EARLY / pre-fame ventures, startups, or first companies.
+- professional_co_occurrence: colleague, direct report, boss, board member,
+  advisor, investor/investee, business partner (not covered by early_venture).
+- institutional_affiliation: same university/fellowship/accelerator cohort where
+  no specific personal friendship is stated (broader than school_tie).
 - social_proof: named as a mentor, "early backer", "first believed in", public
   endorsement.
+- family: spouse/partner, sibling, parent, adult child, or other relative.
 - joint_appearance: shared panel, conference, podcast, interview, event.
 - incidental: any other genuine, specific personal connection not above.
 
